@@ -108,7 +108,6 @@ void hook_thread_proc(void* arg) {
   // Make sure we signal that we have passed any exception throwing code for
   // the waiting hook_enable().
   uv_cond_signal(&hook_control_cond);
-  uv_mutex_unlock(&hook_control_mutex);
 }
 
 int hook_enable() {
@@ -140,8 +139,9 @@ int hook_enable() {
       status = UIOHOOK_SUCCESS;
     }
 
-    logger_proc(LOG_LEVEL_DEBUG, "%s [%u]: Thread Result: (%#X).\n",
-      __FUNCTION__, __LINE__, status);
+    if (status != UIOHOOK_SUCCESS) {
+      uv_mutex_unlock(&hook_running_mutex);
+    }
   }
   else {
     status = UIOHOOK_ERROR_THREAD_CREATE;

@@ -24,7 +24,7 @@ jobs:
           npm config set //registry-lpm.listenai.com/:username zbzhao
           npm config set //registry-lpm.listenai.com/:email zbzhao@listenai.com
       - run: npm install
-      - run: npm run prepack
+      - run: npm run build-ts
       # - run: npm publish --tag=beta --registry=https://registry-lpm.listenai.com
       - uses: JS-DevTools/npm-publish@v1
         with:

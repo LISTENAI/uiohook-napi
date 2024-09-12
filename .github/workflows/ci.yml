@@ -1,6 +1,11 @@
 name: Prebuild
 
-on: push
+on:
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - '.github/**'
 
 jobs:
   prebuild-windows:

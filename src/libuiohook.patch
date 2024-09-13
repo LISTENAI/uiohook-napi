@@ -34,10 +34,10 @@ index ebd4666..799b823 100644
  /* Converts an OSX key code and event mask to the appropriate Unicode character
   * representation.
 diff --git a/src/darwin/input_hook.c b/src/darwin/input_hook.c
-index e6cd6ce..3546c7e 100644
+index e6cd6ce..ff825d3 100644
 --- a/src/darwin/input_hook.c
 +++ b/src/darwin/input_hook.c
-@@ -103,6 +103,37 @@ static dispatcher_t dispatcher = NULL;
+@@ -103,6 +103,31 @@ static dispatcher_t dispatcher = NULL;
  // re-enable the tap when it gets disabled by a timeout
  static event_runloop_info *hook = NULL;
  
@@ -47,35 +47,29 @@ index e6cd6ce..3546c7e 100644
 +static bool hook_enabled = false;
 +static pthread_t accessibility_thread;
 +void accessibility_thread_proc() {
-+    CFRunLoopMode mode = CFRunLoopCopyCurrentMode(event_loop);
-+    while (mode) {
-+        CFRelease(mode);
-+        if (!hook_enabled) {
-+            break;
-+        }
-+
++    while (true) {
 +        bool is_enabled = is_accessibility_enabled(false);
 +
-+        logger(LOG_LEVEL_DEBUG, "%s [%u]: is_accessibility_enabled: %d, mode: %s\n",
-+                __FUNCTION__, __LINE__, is_enabled, mode);
++        // logger(LOG_LEVEL_DEBUG, "%s [%u]: is_accessibility_enabled: %d\n",
++        //         __FUNCTION__, __LINE__, is_enabled);
 +
-+        if (!is_enabled) {
++        if (!is_enabled && hook_enabled) {
 +            hook_stop();
++            break;
 +        }
 +        
 +        usleep(200 * 1000); // 5 check per second
-+        mode = CFRunLoopCopyCurrentMode(event_loop);
-+    }
 +
-+    if (mode) {
-+        CFRelease(mode);
++        if (!hook_enabled) {
++            break;
++        }
 +    }
 +}
 +
  UIOHOOK_API void hook_set_dispatch_proc(dispatcher_t dispatch_proc) {
      logger(LOG_LEVEL_DEBUG, "%s [%u]: Setting new dispatch callback to %#p.\n",
              __FUNCTION__, __LINE__, dispatch_proc);
-@@ -222,6 +253,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
+@@ -222,6 +247,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
              event.type = EVENT_HOOK_ENABLED;
              event.mask = 0x00;
  
@@ -84,7 +78,7 @@ index e6cd6ce..3546c7e 100644
              // Fire the hook start event.
              dispatch_event(&event);
              break;
-@@ -234,6 +267,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
+@@ -234,6 +261,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
              event.type = EVENT_HOOK_DISABLED;
              event.mask = 0x00;
  
@@ -93,7 +87,21 @@ index e6cd6ce..3546c7e 100644
              // Fire the hook stop event.
              dispatch_event(&event);
  
-@@ -958,7 +993,7 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
+@@ -275,9 +304,10 @@ static inline void process_key_pressed(uint64_t timestamp, CGEventRef event_ref)
+         bool is_runloop_main = CFEqual(event_loop, CFRunLoopGetMain());
+ 
+         if (dispatch_sync_f_f != NULL && dispatch_main_queue_s != NULL && !is_runloop_main) {
+-            logger(LOG_LEVEL_DEBUG, "%s [%u]: Using dispatch_sync_f for key typed events.\n",
+-                    __FUNCTION__, __LINE__);
+-            (*dispatch_sync_f_f)(dispatch_main_queue_s, tis_keycode_message, &keycode_to_lookup);
++            // logger(LOG_LEVEL_DEBUG, "%s [%u]: Using dispatch_sync_f for key typed events.\n",
++            //         __FUNCTION__, __LINE__);
++            // (*dispatch_sync_f_f)(dispatch_main_queue_s, tis_keycode_message, &keycode_to_lookup);
++            keycode_to_lookup(tis_keycode_message);
+         }
+         #if !defined(USE_CARBON_LEGACY) && defined(USE_APPLICATION_SERVICES)
+         else if (!is_runloop_main) {
+@@ -958,7 +988,7 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
                      unset_modifier_mask(MOUSE_BUTTON5);
                  }
  
@@ -102,7 +110,7 @@ index e6cd6ce..3546c7e 100644
              }
              break;
  
-@@ -990,9 +1025,18 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
+@@ -990,9 +1020,18 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
                  logger(LOG_LEVEL_WARN, "%s [%u]: CGEventTap timeout!\n",
                          __FUNCTION__, __LINE__);
  
@@ -124,7 +132,16 @@ index e6cd6ce..3546c7e 100644
                  }
              } else {
                  // In theory this *should* never execute.
-@@ -1269,7 +1313,7 @@ UIOHOOK_API int hook_run() {
+@@ -1250,6 +1289,8 @@ static void destroy_event_runloop_info(event_runloop_info **hook) {
+             // Clean up the event source.
+             CFRelease((*hook)->source);
+             (*hook)->source = NULL;
++
++            event_loop = NULL;
+         }
+ 
+         if ((*hook)->port != NULL) {
+@@ -1269,7 +1310,7 @@ UIOHOOK_API int hook_run() {
      int status = UIOHOOK_SUCCESS;
  
      // Check for accessibility before we start the loop.
@@ -133,18 +150,36 @@ index e6cd6ce..3546c7e 100644
          logger(LOG_LEVEL_DEBUG, "%s [%u]: Accessibility API is enabled.\n",
                  __FUNCTION__, __LINE__);
  
-@@ -1368,6 +1412,11 @@ UIOHOOK_API int hook_run() {
+@@ -1368,11 +1409,16 @@ UIOHOOK_API int hook_run() {
              auto_release_pool = eventWithoutCGEvent(pool, sel_registerName("init"));
              #endif
  
 +            // Start the accssiblity detect thread.
-+            if (pthread_create(&accessibility_thread, NULL, (void *) accessibility_thread_proc, NULL) != 0) {
-+                logger(LOG_LEVEL_DEBUG, "%s [%u]: accessibility_thread_proc created!\n",
-+                        __FUNCTION__, __LINE__);
++            int thread_res = pthread_create(&accessibility_thread, NULL, (void *) accessibility_thread_proc, NULL);
++            if (thread_res != 0) {
++                logger(LOG_LEVEL_DEBUG, "%s [%u]: accessibility_thread_proc create failed! Code: %d\n",
++                        __FUNCTION__, __LINE__, thread_res);
 +            }
  
              // Start the hook thread runloop.
              CFRunLoopRun();
+ 
+-
+             #ifdef USE_OBJC
+             // Contributed by Alex <universailp@web.de>
+             eventWithoutCGEvent(auto_release_pool, sel_registerName("release"));
+@@ -1422,6 +1468,11 @@ UIOHOOK_API int hook_stop() {
+ 
+         // Stop the run loop.
+         CFRunLoopStop(event_loop);
++        logger(LOG_LEVEL_DEBUG, "%s [%u]: CFRunLoopStop event_loop: %p\n",
++                __FUNCTION__, __LINE__, event_loop);
++
++        hook_enabled = false;
++        pthread_join(accessibility_thread, NULL);
+ 
+         // Cleanup native input functions.
+         unload_input_helper();
 diff --git a/src/windows/input_helper.c b/src/windows/input_helper.c
 index e690021..0d383e0 100644
 --- a/src/windows/input_helper.c

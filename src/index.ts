@@ -216,6 +216,8 @@ declare interface UiohookNapi {
   on(event: 'click', listener: (e: UiohookMouseEvent) => void): this
 
   on(event: 'wheel', listener: (e: UiohookWheelEvent) => void): this
+  on(event: 'enabled', listener: (e: UiohookStateEvent) => void): this
+  on(event: 'disabled', listener: (e: UiohookStateEvent) => void): this
 }
 
 class UiohookNapi extends EventEmitter {

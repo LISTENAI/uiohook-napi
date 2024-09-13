@@ -53,6 +53,8 @@ void worker_dispatch_proc(uiohook_event* const event) {
     uv_mutex_lock(&hook_control_mutex);
     uv_cond_signal(&hook_control_cond);
     uv_mutex_unlock(&hook_control_mutex);
+
+    user_dispatcher(event);
     break;
 
   case EVENT_HOOK_DISABLED:
@@ -61,6 +63,8 @@ void worker_dispatch_proc(uiohook_event* const event) {
 
     // Unlock the running mutex so we know if the hook is disabled.
     uv_mutex_unlock(&hook_running_mutex);
+
+    user_dispatcher(event);
     break;
 
   case EVENT_KEY_PRESSED:
@@ -108,6 +112,8 @@ void hook_thread_proc(void* arg) {
   // Make sure we signal that we have passed any exception throwing code for
   // the waiting hook_enable().
   uv_cond_signal(&hook_control_cond);
+  uv_mutex_trylock(&hook_control_mutex);
+  uv_mutex_unlock(&hook_control_mutex);
 }
 
 int hook_enable() {

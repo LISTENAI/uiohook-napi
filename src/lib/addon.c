@@ -151,6 +151,17 @@ napi_value uiohook_to_js_event(napi_env env, uiohook_event* event) {
     NAPI_FATAL_IF_FAILED(status, "uiohook_to_js_event", "napi_define_properties");
     return event_obj;
   }
+  else if (event->type == EVENT_HOOK_ENABLED || event->type == EVENT_HOOK_DISABLED) {
+    
+    napi_property_descriptor descriptors[] = {
+      { "type",      NULL, NULL, NULL, NULL, e_type,      napi_enumerable, NULL },
+      { "time",      NULL, NULL, NULL, NULL, e_time,      napi_enumerable, NULL },
+    };
+    status = napi_define_properties(env, event_obj, sizeof(descriptors) / sizeof(descriptors[0]), descriptors);
+    NAPI_FATAL_IF_FAILED(status, "uiohook_to_js_event", "napi_define_properties");
+
+    return event_obj;
+  }
 
   return NULL; // never
 }

@@ -1,8 +1,99 @@
+diff --git a/src/darwin/input_helper.c b/src/darwin/input_helper.c
+index ada5829..20a68db 100644
+--- a/src/darwin/input_helper.c
++++ b/src/darwin/input_helper.c
+@@ -40,7 +40,7 @@ static KeyboardLayoutRef prev_keyboard_layout = NULL;
+ static TISInputSourceRef prev_keyboard_layout = NULL;
+ #endif
+ 
+-bool is_accessibility_enabled() {
++bool is_accessibility_enabled(bool prompt) {
+     bool is_enabled = false;
+ 
+     // Dynamically load the application services framework for examination.
+@@ -59,7 +59,7 @@ bool is_accessibility_enabled() {
+         } else if (kAXTrustedCheckOptionPrompt_t != NULL) {
+             // New accessibility API 10.9 and later.
+             const void * keys[] = { *kAXTrustedCheckOptionPrompt_t };
+-            const void * values[] = { kCFBooleanTrue };
++            const void * values[] = { prompt ? kCFBooleanTrue : kCFBooleanFalse };
+ 
+             CFDictionaryRef options = CFDictionaryCreate(
+                     kCFAllocatorDefault,
+diff --git a/src/darwin/input_helper.h b/src/darwin/input_helper.h
+index ebd4666..799b823 100644
+--- a/src/darwin/input_helper.h
++++ b/src/darwin/input_helper.h
+@@ -170,7 +170,7 @@
+ 
+ /* Check for access to Apples accessibility API.
+  */
+-extern bool is_accessibility_enabled();
++extern bool is_accessibility_enabled(bool prompt);
+ 
+ /* Converts an OSX key code and event mask to the appropriate Unicode character
+  * representation.
 diff --git a/src/darwin/input_hook.c b/src/darwin/input_hook.c
-index e6cd6ce..04d040b 100644
+index e6cd6ce..3546c7e 100644
 --- a/src/darwin/input_hook.c
 +++ b/src/darwin/input_hook.c
-@@ -958,7 +958,7 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
+@@ -103,6 +103,37 @@ static dispatcher_t dispatcher = NULL;
+ // re-enable the tap when it gets disabled by a timeout
+ static event_runloop_info *hook = NULL;
+ 
++// cause is_accessibility_enabled value might change during runtime
++// we need detect it while hook is enabled
++// Once it is disabled, we should stop the hooking
++static bool hook_enabled = false;
++static pthread_t accessibility_thread;
++void accessibility_thread_proc() {
++    CFRunLoopMode mode = CFRunLoopCopyCurrentMode(event_loop);
++    while (mode) {
++        CFRelease(mode);
++        if (!hook_enabled) {
++            break;
++        }
++
++        bool is_enabled = is_accessibility_enabled(false);
++
++        logger(LOG_LEVEL_DEBUG, "%s [%u]: is_accessibility_enabled: %d, mode: %s\n",
++                __FUNCTION__, __LINE__, is_enabled, mode);
++
++        if (!is_enabled) {
++            hook_stop();
++        }
++        
++        usleep(200 * 1000); // 5 check per second
++        mode = CFRunLoopCopyCurrentMode(event_loop);
++    }
++
++    if (mode) {
++        CFRelease(mode);
++    }
++}
++
+ UIOHOOK_API void hook_set_dispatch_proc(dispatcher_t dispatch_proc) {
+     logger(LOG_LEVEL_DEBUG, "%s [%u]: Setting new dispatch callback to %#p.\n",
+             __FUNCTION__, __LINE__, dispatch_proc);
+@@ -222,6 +253,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
+             event.type = EVENT_HOOK_ENABLED;
+             event.mask = 0x00;
+ 
++            hook_enabled = true;
++
+             // Fire the hook start event.
+             dispatch_event(&event);
+             break;
+@@ -234,6 +267,8 @@ static void hook_status_proc(CFRunLoopObserverRef observer, CFRunLoopActivity ac
+             event.type = EVENT_HOOK_DISABLED;
+             event.mask = 0x00;
+ 
++            hook_enabled = false;
++
+             // Fire the hook stop event.
+             dispatch_event(&event);
+ 
+@@ -958,7 +993,7 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
                      unset_modifier_mask(MOUSE_BUTTON5);
                  }
  
@@ -11,6 +102,49 @@ index e6cd6ce..04d040b 100644
              }
              break;
  
+@@ -990,9 +1025,18 @@ CGEventRef hook_event_proc(CGEventTapProxy tap_proxy, CGEventType type, CGEventR
+                 logger(LOG_LEVEL_WARN, "%s [%u]: CGEventTap timeout!\n",
+                         __FUNCTION__, __LINE__);
+ 
+-                // We need to re-enable the tap
+-                if (hook->port) {
+-                    CGEventTapEnable(hook->port, true);
++                if (is_accessibility_enabled(false)) {
++                    // We need to re-enable the tap
++                    if (hook->port) {
++                        CGEventTapEnable(hook->port, true);
++                    }
++                } else {
++                    if (hook->port) {
++                        CGEventTapEnable(hook->port, false);
++                    }
++                    int status = hook_stop();
++                    logger(LOG_LEVEL_ERROR, "%s [%u]: Accessibility API is disabled! Stop hook status: 0x(%x)\n",
++                            __FUNCTION__, __LINE__, status);
+                 }
+             } else {
+                 // In theory this *should* never execute.
+@@ -1269,7 +1313,7 @@ UIOHOOK_API int hook_run() {
+     int status = UIOHOOK_SUCCESS;
+ 
+     // Check for accessibility before we start the loop.
+-    if (is_accessibility_enabled()) {
++    if (is_accessibility_enabled(false)) {
+         logger(LOG_LEVEL_DEBUG, "%s [%u]: Accessibility API is enabled.\n",
+                 __FUNCTION__, __LINE__);
+ 
+@@ -1368,6 +1412,11 @@ UIOHOOK_API int hook_run() {
+             auto_release_pool = eventWithoutCGEvent(pool, sel_registerName("init"));
+             #endif
+ 
++            // Start the accssiblity detect thread.
++            if (pthread_create(&accessibility_thread, NULL, (void *) accessibility_thread_proc, NULL) != 0) {
++                logger(LOG_LEVEL_DEBUG, "%s [%u]: accessibility_thread_proc created!\n",
++                        __FUNCTION__, __LINE__);
++            }
+ 
+             // Start the hook thread runloop.
+             CFRunLoopRun();
 diff --git a/src/windows/input_helper.c b/src/windows/input_helper.c
 index e690021..0d383e0 100644
 --- a/src/windows/input_helper.c
